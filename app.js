@@ -1,312 +1,146 @@
-const express = require('express');
-const bodyParser = require('body-parser');
-const jwt = require('jsonwebtoken');
-const multer = require('multer');
+const sqlite3 = require('sqlite3').verbose();
 const path = require('path');
 
-const db = require('./database');  // Importando a configuração do banco de dados
+// Banco de dados persistente em arquivo SQLite
+const db = new sqlite3.Database(path.join(__dirname, 'database.sqlite'));
 
-// Configuração do multer para upload de arquivos
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    cb(null, './public/uploads/'); // Defina o caminho para a pasta de upload
-  },
-  filename: (req, file, cb) => {
-    const ext = path.extname(file.originalname);
-    cb(null, `${Date.now()}${ext}`); // Define o nome do arquivo de forma única
-  }
-});
+db.serialize(() => {
+  // Criação da tabela de usuários
+  db.run(`
+    CREATE TABLE IF NOT EXISTS users (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      profile TEXT,
+      name TEXT,
+      document TEXT,
+      full_address TEXT,
+      email TEXT UNIQUE,
+      password TEXT,
+      status BOOLEAN DEFAULT 1,
+      createdAt TEXT,
+      updatedAt TEXT
+    )
+  `);
 
-const app = express();
-app.use(bodyParser.json());
-
-
-
-
-// Função de validação de campos obrigatórios
-function validateUserInput(user) {
-  const { profile, name, document, full_address, email, password } = user;
-  if (!profile || !name || !document || !full_address || !email || !password) {
-    return 'All fields are required: profile, name, document, full_address, email, password.';
-  }
-  return null;
-}
-
-// Rota de cadastro de usuário com validação e retorno completo
-app.post('/register', (req, res) => {
-  const { profile, name, document, full_address, email, password } = req.body;
-  
-  // Validação dos dados de entrada
-  const validationError = validateUserInput(req.body);
-  if (validationError) {
-    return res.status(400).json({ error: validationError });
-  }
-
-  // Verifica se o e-mail ou documento já estão em uso
-  db.get('SELECT * FROM users WHERE email = ? OR document = ?', [email, document], (err, existingUser) => {
+  // Verifica se já existe um usuário com o email "admin@gmail.com"
+  db.get("SELECT COUNT(*) AS count FROM users WHERE email = ?", ['admin@gmail.com'], (err, row) => {
     if (err) {
-      return res.status(500).json({ error: 'Database error' });
+      console.error(err.message);
+    } else if (row.count === 0) {
+      // Se não existir, insere o novo usuário
+      const insertUsers = db.prepare(`
+        INSERT INTO users (profile, name, document, full_address, email, password) 
+        VALUES (?, ?, ?, ?,?, ?)
+      `);
+
+      insertUsers.run('admin', 'ADMINISTRADOR', '999-999-999-01', 'MATRIZ UMBRELLA', 'admin@gmail.com', '123456');
+      insertUsers.finalize();
+    } else {
+      console.log('Usuário já inserido no banco de dados.');
     }
-    if (existingUser) {
-      return res.status(400).json({ error: 'Email or document already in use' });
-    }
-
-    const createdAt = new Date().toISOString();
-    const updatedAt = createdAt;
-
-    db.run(
-      'INSERT INTO users (profile, name, document, full_address, email, password, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-      [profile, name, document, full_address, email, password, createdAt, updatedAt],
-      function (err) {
-        if (err) {
-          return res.status(400).json({ error: err.message });
-        }
-
-        // Retorna o usuário criado
-        db.get('SELECT * FROM users WHERE id = ?', [this.lastID], (err, user) => {
-          if (err) {
-            return res.status(500).json({ error: err.message });
-          }
-          res.status(201).json(user);
-        });
-      }
-    );
   });
-});
 
-// Rota de login (sem criptografia de senha e retornando nome e perfil)
-app.post('/login', (req, res) => {
-  const { email, password } = req.body;
-  db.get('SELECT * FROM users WHERE email = ? AND password = ?', [email, password], (err, user) => {
+  // Criação da tabela de produtos com imagem e descrição
+  db.run(`
+    CREATE TABLE IF NOT EXISTS products (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT,
+      quantity INTEGER,
+      branch_id INTEGER,
+      image_url TEXT,
+      description TEXT,
+      FOREIGN KEY (branch_id) REFERENCES branches(id)
+    )
+  `);
+
+  // Criação da tabela de filiais com latitude e longitude
+  db.run(`
+    CREATE TABLE IF NOT EXISTS branches (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT,
+      location TEXT,
+      latitude REAL,
+      longitude REAL
+    )
+  `);
+
+  // Verifica se já existem filiais no banco de dados
+  db.get("SELECT COUNT(*) AS count FROM branches", (err, row) => {
     if (err) {
-      return res.status(500).json({ error: err.message });
-    }
-    if (!user) {
-      return res.status(401).json({ error: 'Invalid credentials' });
-    }
-    res.json({ name: user.name, profile: user.profile });
-  });
-});
+      console.error(err.message);
+    } else if (row.count === 0) {
+      // Se não existir nenhuma filial, insere os dados predefinidos
+      const insertBranches = db.prepare(`
+        INSERT INTO branches (name, location, latitude, longitude) 
+        VALUES (?, ?, ?, ?)
+      `);
 
-// Rota de listagem de usuários
-app.get('/users', (req, res) => {
-  db.all('SELECT * FROM users', [], (err, rows) => {
+      insertBranches.run('Farmácia Saúde SP', 'São Paulo', -23.55052, -46.633308);
+      insertBranches.run('Farmácia Bem-Estar CE', 'Fortaleza, Ceará', -3.71722, -38.54337);
+      insertBranches.run('Farmácia Vida SC', 'Florianópolis, Santa Catarina', -27.595377, -48.54805);
+
+      insertBranches.finalize();
+    } else {
+      console.log('Filiais já inseridas no banco de dados.');
+    }
+  });
+
+  // Verifica se já existem produtos no banco de dados
+  db.get("SELECT COUNT(*) AS count FROM products", (err, row) => {
     if (err) {
-      return res.status(500).json({ error: err.message });
+      console.error(err.message);
+    } else if (row.count === 0) {
+      const insertProducts = db.prepare(`
+        INSERT INTO products (name, quantity, branch_id, image_url, description) 
+        VALUES (?, ?, ?, ?, ?)
+      `);
+
+      const imageUrl = 'https://drogariasp.vteximg.com.br/arquivos/ids/759950-1000-1000/10227---paracetamol-750mg-20-comprimidos-generico-1.jpg?v=637980224448970000';
+
+      insertProducts.run('Paracetamol', 100, 1, imageUrl, 'Analgésico e antipirético indicado para alívio da dor e febre.');
+      insertProducts.run('Ibuprofeno', 50, 1, imageUrl, 'Anti-inflamatório e analgésico utilizado para tratar dor e febre.');
+      insertProducts.run('Amoxicilina', 30, 1, imageUrl, 'Antibiótico usado para tratar uma variedade de infecções bacterianas.');
+      insertProducts.run('Vitamina C', 200, 2, imageUrl, 'Suplemento vitamínico para fortalecer o sistema imunológico.');
+      insertProducts.run('Dipirona', 150, 2, imageUrl, 'Analgésico e antitérmico para o alívio da dor e febre.');
+      insertProducts.run('Antigripal', 75, 2, imageUrl, 'Medicamento indicado para o tratamento dos sintomas da gripe.');
+      insertProducts.run('Aspirina', 120, 3, imageUrl, 'Analgésico e antipirético indicado para o alívio da dor e febre.');
+      insertProducts.run('Omeprazol', 90, 3, imageUrl, 'Medicamento utilizado para tratar problemas gastrointestinais, como refluxo.');
+      insertProducts.run('Cloridrato de Metformina', 60, 3, imageUrl, 'Medicamento indicado para o tratamento da diabetes tipo 2.');
+      insertProducts.run('Losartana', 80, 1, imageUrl, 'Medicamento usado para tratar hipertensão e proteger os rins.');
+
+      insertProducts.finalize();
+    } else {
+      console.log('Produtos já inseridos no banco de dados.');
     }
-    res.json(rows);
   });
+
+  // Criação da tabela de movimentações
+  db.run(`
+    CREATE TABLE IF NOT EXISTS movements (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      origin_branch_id INTEGER,
+      destination_branch_id INTEGER,
+      product_id INTEGER,
+      quantity INTEGER,
+      status TEXT,
+      createdAt TEXT,
+      updatedAt TEXT,
+      FOREIGN KEY (origin_branch_id) REFERENCES branches(id),
+      FOREIGN KEY (destination_branch_id) REFERENCES branches(id),
+      FOREIGN KEY (product_id) REFERENCES products(id)
+    )
+  `);
+
+  // Criação da tabela de histórico de movimentações
+  db.run(`
+    CREATE TABLE IF NOT EXISTS movement_history (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      movement_id INTEGER,
+      status TEXT,
+      file TEXT DEFAULT NULL,
+      timestamp DATETIME,
+      FOREIGN KEY (movement_id) REFERENCES movements(id)
+    )
+  `);
 });
 
-// Rota para ativar/desativar usuário
-app.patch('/users/:id/toggle-status', (req, res) => {
-  const { id } = req.params;
-  const updatedAt = new Date().toISOString();
-  db.run('UPDATE users SET status = NOT status, updatedAt = ? WHERE id = ?', [updatedAt, id], function (err) {
-    if (err) {
-      return res.status(400).json({ error: err.message });
-    }
-
-    // Retorna o usuário atualizado
-    db.get('SELECT * FROM users WHERE id = ?', [id], (err, user) => {
-      if (err) {
-        return res.status(500).json({ error: err.message });
-      }
-      res.json(user);
-    });
-  });
-});
-
-// Rota de listagem de produtos com imagem, descrição e query params para buscar por nome de produto ou nome da filial
-app.get('/products', (req, res) => {
-  const queryParam = req.query.query || '';  // Query params chamado 'query'
-
-  db.all(`
-    SELECT products.name AS product_name, products.quantity, products.image_url, products.description, 
-           branches.name AS branch_name, branches.location, branches.latitude, branches.longitude
-    FROM products
-    INNER JOIN branches ON products.branch_id = branches.id
-    WHERE products.name LIKE ? OR branches.name LIKE ?
-  `, [`%${queryParam}%`, `%${queryParam}%`], (err, rows) => {
-    if (err) {
-      return res.status(500).json({ error: err.message });
-    }
-    res.json(rows);
-  });
-});
-
-// Rota para cadastro de movimentações
-// Rota para cadastro de movimentações
-app.post('/movements', (req, res) => {
-  const { originBranchId, destinationBranchId, productId, quantity } = req.body;
-  const createdAt = new Date().toISOString();
-  const updatedAt = createdAt;
-
-  // Verificar se há estoque suficiente no produto da filial de origem
-  db.get('SELECT quantity FROM products WHERE id = ? AND branch_id = ?', [productId, originBranchId], (err, product) => {
-    if (err || !product) {
-      return res.status(400).json({ error: 'Produto não encontrado na filial de origem' });
-    }
-    if (product.quantity < quantity) {
-      return res.status(400).json({ error: 'Estoque insuficiente para essa movimentação' });
-    }
-
-    // Subtrair a quantidade do produto na filial de origem
-    const newQuantity = product.quantity - quantity;
-    db.run('UPDATE products SET quantity = ? WHERE id = ? AND branch_id = ?', [newQuantity, productId, originBranchId], (err) => {
-      if (err) {
-        return res.status(500).json({ error: 'Erro ao atualizar a quantidade de produto na filial de origem' });
-      }
-
-      // Inserir a movimentação
-      db.run(`
-        INSERT INTO movements (origin_branch_id, destination_branch_id, product_id, quantity, status, createdAt, updatedAt) 
-        VALUES (?, ?, ?, ?, 'created', ?, ?)`,
-        [originBranchId, destinationBranchId, productId, quantity, createdAt, updatedAt],
-        function (err) {
-          if (err) {
-            return res.status(500).json({ error: 'Erro ao criar a movimentação' });
-          }
-
-          const movementId = this.lastID;
-
-          // Atualizar o histórico de movimentação
-          db.run(`
-            INSERT INTO movement_history (movement_id, status, timestamp)
-            VALUES (?, 'created', datetime('now'))
-          `, [movementId], (err) => {
-            if (err) {
-              return res.status(500).json({ error: 'Erro ao criar o histórico de movimentação' });
-            }
-
-            // Retorna a movimentação criada
-            db.get('SELECT * FROM movements WHERE id = ?', [movementId], (err, movement) => {
-              if (err) {
-                return res.status(500).json({ error: 'Erro ao buscar a movimentação criada' });
-              }
-              res.status(201).json(movement);
-            });
-          });
-        });
-    });
-  });
-});
-
-app.use('/uploads', express.static('/uploads'));
-
-
-// Rota para listar todas as movimentações
-// Rota para listar todas as movimentações com detalhes de origem, destino, e histórico
-app.get('/movements', (req, res) => {
-  // Buscar todas as movimentações
-  db.all(`
-    SELECT movements.id AS movement_id, products.name AS product_name, products.image_url, movements.quantity, movements.status, 
-           branches_origin.name AS origin_name, branches_origin.latitude AS origin_latitude, branches_origin.longitude AS origin_longitude,
-           branches_destination.name AS destination_name, branches_destination.latitude AS destination_latitude, branches_destination.longitude AS destination_longitude, 
-           movements.createdAt
-    FROM movements
-    INNER JOIN products ON movements.product_id = products.id
-    INNER JOIN branches AS branches_origin ON movements.origin_branch_id = branches_origin.id
-    INNER JOIN branches AS branches_destination ON movements.destination_branch_id = branches_destination.id
-  `, (err, movements) => {
-    if (err) {
-      return res.status(500).json({ error: 'Erro ao buscar as movimentações' });
-    }
-
-    if (movements.length === 0) {
-      return res.status(404).json({ message: 'Nenhuma movimentação encontrada' });
-    }
-
-    // Para cada movimentação, buscar o histórico correspondente
-    const movementsWithHistory = [];
-
-    movements.forEach((movement, index) => {
-      db.all('SELECT id, status AS descricao, file, timestamp FROM movement_history WHERE movement_id = ?', [movement.movement_id], (err, history) => {
-        if (err) {
-          return res.status(500).json({ error: 'Erro ao buscar o histórico de uma movimentação' });
-        }
-
-        // Montar a resposta para cada movimentação
-        const movementData = {
-          id: movement.movement_id,
-          produto: {
-            nome: movement.product_name,
-            imagem: movement.image_url
-          },
-          quantidade: movement.quantity,
-          status: movement.status,
-          origem: {
-            nome: movement.origin_name,
-            latitude: movement.origin_latitude,
-            longitude: movement.origin_longitude
-          },
-          destino: {
-            nome: movement.destination_name,
-            latitude: movement.destination_latitude,
-            longitude: movement.destination_longitude
-          },
-          dataCriacao: movement.createdAt,
-          historico: history.map(h => ({
-            id: h.id,
-            descricao: h.descricao,
-            data: h.timestamp,
-            file: `${req.protocol}://${req.get('host')}\/` +h.file
-          }))
-        };
-
-        movementsWithHistory.push(movementData);
-
-        // Verifica se todas as movimentações foram processadas
-        if (movementsWithHistory.length === movements.length) {
-          res.status(200).json(movementsWithHistory);
-        }
-      });
-    });
-  });
-});
-
-
-const upload = multer({ storage });
-
-// Rota para iniciar a movimentação e salvar o upload da imagem
-app.post('/movements/:id/start', upload.single('file'), (req, res) => {
-  const { id } = req.params;
-  const { motorista } = req.body;
-  const filePath = req.file ? req.file.path : null;
-  const updatedAt = new Date().toISOString();
-
-  if (!filePath || !motorista) {
-    return res.status(400).json({ error: 'Imagem ou nome do motorista não fornecido' });
-  }
-
-  // Atualizar o status da movimentação para "em trânsito"
-  db.run('UPDATE movements SET status = ?, updatedAt = ? WHERE id = ?', ['em transito', updatedAt, id], function (err) {
-    if (err) {
-      return res.status(500).json({ error: 'Erro ao atualizar o status da movimentação' });
-    }
-
-    // Adicionar uma mensagem no histórico de que o motorista coletou o pacote
-    const mensagem = `Motorista ${motorista} coletou o pacote`;
-    db.run(`
-      INSERT INTO movement_history (movement_id, status, file, timestamp) 
-      VALUES (?, ?,  ?, datetime('now'))`,
-      [id, mensagem, filePath],
-      function (err) {
-        if (err) {
-          return res.status(500).json({ error: 'Erro ao salvar o histórico da movimentação' });
-        }
-
-        // Retornar sucesso com o caminho do arquivo e a mensagem salva
-        res.status(200).json({
-          message: 'Movimentação atualizada para "em transito". Histórico atualizado.',
-          filePath: filePath
-        });
-      }
-    );
-  });
-});
-
-// Porta do servidor
-app.listen(3000, () => {
-  console.log('Server running on port 3000');
-});
+module.exports = db;
