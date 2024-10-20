@@ -20,9 +20,6 @@ const storage = multer.diskStorage({
 const app = express();
 app.use(bodyParser.json());
 
-
-
-
 // Função de validação de campos obrigatórios
 function validateUserInput(user) {
   const { profile, name, document, full_address, email, password } = user;
@@ -214,7 +211,7 @@ app.get('/movements', (req, res) => {
     }
 
     if (movements.length === 0) {
-      return res.status(404).json({ message: 'Nenhuma movimentação encontrada' });
+      return res.status(200).json([]);
     }
 
     // Para cada movimentação, buscar o histórico correspondente
@@ -305,6 +302,35 @@ app.post('/movements/:id/start', upload.single('file'), (req, res) => {
     );
   });
 });
+
+app.get('/branches/options', (req, res) => {
+  db.all('SELECT * FROM branches', [], (err, rows) => {
+    if (err) {
+      return res.status(500).json({ error: err.message });
+    }
+    res.json(rows);
+  });
+});
+
+app.get('/products/options', (req, res) => {
+  const queryParam = req.query.query || '';  // Query params chamado 'query'
+
+  db.all(`
+    SELECT  products.quantity,
+           branches.name AS branch_name,
+           products.id as product_id,
+           branches.id as branch_id
+    FROM products
+    INNER JOIN branches ON products.branch_id = branches.id
+    WHERE products.name LIKE ? OR branches.name LIKE ?
+  `, [`%${queryParam}%`, `%${queryParam}%`], (err, rows) => {
+    if (err) {
+      return res.status(500).json({ error: err.message });
+    }
+    res.json(rows);
+  });
+});
+
 
 // Porta do servidor
 app.listen(3000, () => {
