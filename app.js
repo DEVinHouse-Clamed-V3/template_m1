@@ -266,7 +266,7 @@ app.get('/movements', (req, res) => {
 const upload = multer({ storage });
 
 // Rota para iniciar a movimentação e salvar o upload da imagem
-app.post('/movements/:id/start', upload.single('file'), (req, res) => {
+app.put('/movements/:id/start', upload.single('file'), (req, res) => {
   const { id } = req.params;
   const { motorista } = req.body;
   const filePath = req.file ? req.file.path : null;
@@ -303,6 +303,44 @@ app.post('/movements/:id/start', upload.single('file'), (req, res) => {
   });
 });
 
+
+app.put('/movements/:id/end', upload.single('file'), (req, res) => {
+  const { id } = req.params;
+  const { motorista } = req.body;
+  const filePath = req.file ? req.file.path : null;
+  const updatedAt = new Date().toISOString();
+
+  if (!filePath || !motorista) {
+    return res.status(400).json({ error: 'Imagem ou nome do motorista não fornecido' });
+  }
+
+  // Atualizar o status da movimentação para "em trânsito"
+  db.run('UPDATE movements SET status = ?, updatedAt = ? WHERE id = ?', ['Coleta finalizada', updatedAt, id], function (err) {
+    if (err) {
+      return res.status(500).json({ error: 'Erro ao atualizar o status da movimentação' });
+    }
+
+    // Adicionar uma mensagem no histórico de que o motorista coletou o pacote
+    const mensagem = `Motorista ${motorista} entregou o pacote`;
+    db.run(`
+      INSERT INTO movement_history (movement_id, status, file, timestamp) 
+      VALUES (?, ?,  ?, datetime('now'))`,
+      [id, mensagem, filePath],
+      function (err) {
+        if (err) {
+          return res.status(500).json({ error: 'Erro ao salvar o histórico da movimentação' });
+        }
+
+        // Retornar sucesso com o caminho do arquivo e a mensagem salva
+        res.status(200).json({
+          message: 'Movimentação atualizada para "coleta finalizada". Histórico atualizado.',
+          filePath: filePath
+        });
+      }
+    );
+  });
+});
+
 app.get('/branches/options', (req, res) => {
   db.all('SELECT * FROM branches', [], (err, rows) => {
     if (err) {
@@ -316,7 +354,9 @@ app.get('/products/options', (req, res) => {
   const queryParam = req.query.query || '';  // Query params chamado 'query'
 
   db.all(`
-    SELECT  products.quantity,
+    SELECT  
+          products.quantity,
+          products.name as product_name,
            branches.name AS branch_name,
            products.id as product_id,
            branches.id as branch_id
